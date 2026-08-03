@@ -68,9 +68,27 @@ export default class LayoutELK {
 		const elkDirection = layoutDirection === VERTICAL ? "DOWN" : "RIGHT";
 
 		// Default layout options for ELK
+		// The nodePlacement/layering/crossingMinimization strategies are set to
+		// INTERACTIVE together so ELK treats each node's current x_pos/y_pos
+		// (passed as x/y below) as a hint: layering.strategy uses the x hint to
+		// assign layers (columns), crossingMinimization.strategy uses the y hint
+		// to order nodes within a layer, and nodePlacement.strategy uses the y
+		// hint for final placement. This keeps a re-run of Auto Layout close to
+		// the diagram's current arrangement instead of reflowing it from scratch.
+		// For large generated graphs (a few hundred+ nodes) where the existing
+		// positions aren't meaningful, override these back to ELK's defaults
+		// (e.g. "NETWORK_SIMPLEX" / "LAYER_SWEEP") via canvasLayout.elkLayout.root.
+		// elk.separateConnectedComponents must also be "false" here: by default
+		// ELK lays out each disconnected component independently from its own
+		// local origin, which discards the x hint for any node/component that
+		// isn't connected to the rest of the graph - layering.strategy INTERACTIVE
+		// alone isn't enough to place disconnected nodes using their x hint.
 		const defaultLayoutOptions = {
 			"elk.algorithm": "layered",
 			"elk.direction": elkDirection,
+			"elk.separateConnectedComponents": "false",
+			"elk.layered.layering.strategy": "INTERACTIVE",
+			"elk.layered.crossingMinimization.strategy": "INTERACTIVE",
 			"elk.layered.nodePlacement.strategy": "INTERACTIVE",
 			"elk.padding": `[top=${marginY},left=${marginX},bottom=${marginY},right=${marginX}]`,
 			"elk.layered.spacing.nodeNodeBetweenLayers": 80, // Gap between layers within a group
@@ -215,13 +233,24 @@ export default class LayoutELK {
 	}
 
 	// Helper method to create a dummy node for detached link endpoints
-	static createDummyNode(id, width, height, layoutOptions) {
-		return {
+	// x, y are optional position hints (top-left coords) for INTERACTIVE
+	// layering/crossingMinimization/nodePlacement, derived from the detached
+	// link's existing srcPos/trgPos so a re-layout keeps the loose end close to
+	// where it was left.
+	static createDummyNode(id, width, height, layoutOptions, x, y) {
+		const dummyNode = {
 			id,
 			width,
 			height,
 			layoutOptions
 		};
+
+		if (typeof x === "number" && typeof y === "number") {
+			dummyNode.x = x;
+			dummyNode.y = y;
+		}
+
+		return dummyNode;
 	}
 
 	// Helper method to create ELK edges from canvas links with support for detached links
@@ -259,13 +288,17 @@ export default class LayoutELK {
 			// Handle semi-detached link (detached source end)
 			if (link.srcPos) {
 				srcNodeId = `temp-src-node-${link.id}`;
-				dummyNodes.push(this.createDummyNode(srcNodeId, defaultWidth, defaultHeight, nodeLayoutOptions));
+				// srcPos.y_pos is stored as a center y (see convertGraphToMovedLinks
+				// below); convert back to top-left for the ELK position hint.
+				dummyNodes.push(this.createDummyNode(srcNodeId, defaultWidth, defaultHeight, nodeLayoutOptions,
+					link.srcPos.x_pos, link.srcPos.y_pos - (defaultHeight / 2)));
 			}
 
 			// Handle semi-detached link (detached target end)
 			if (link.trgPos) {
 				trgNodeId = `temp-trg-node-${link.id}`;
-				dummyNodes.push(this.createDummyNode(trgNodeId, defaultWidth, defaultHeight, nodeLayoutOptions));
+				dummyNodes.push(this.createDummyNode(trgNodeId, defaultWidth, defaultHeight, nodeLayoutOptions,
+					link.trgPos.x_pos, link.trgPos.y_pos - (defaultHeight / 2)));
 			}
 
 			// Create edge with appropriate source and target (real nodes or dummy nodes)
@@ -289,6 +322,10 @@ export default class LayoutELK {
 			id: comment.id,
 			width: comment.width,
 			height: comment.height,
+			// Position hint for INTERACTIVE layering/crossingMinimization - see
+			// defaultLayoutOptions in performLayout for why this is set.
+			x: comment.x_pos,
+			y: comment.y_pos,
 			layoutOptions: {
 				"elk.commentBox": "true"
 			}
@@ -301,6 +338,12 @@ export default class LayoutELK {
 			id: node.id,
 			width: node.width,
 			height: node.height,
+			// Position hint for INTERACTIVE layering/crossingMinimization/
+			// nodePlacement - see defaultLayoutOptions in performLayout for why
+			// this is set. node.x_pos/y_pos are already top-left coords, same as
+			// ELK's x/y, so no conversion is needed.
+			x: node.x_pos,
+			y: node.y_pos,
 			layoutOptions
 		};
 
