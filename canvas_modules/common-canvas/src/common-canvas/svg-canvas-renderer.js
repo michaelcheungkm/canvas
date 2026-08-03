@@ -5419,7 +5419,7 @@ export default class SVGCanvasRenderer {
 		}
 
 		// Add connection path info to the links.
-		linksArray = this.linkUtils.addConnectionPaths(linksArray);
+		linksArray = this.linkUtils.addConnectionPaths(linksArray, this.activePipeline.nodes);
 
 		this.logger.logEndTimer("buildLinksArray");
 

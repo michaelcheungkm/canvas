@@ -62,6 +62,7 @@ export default class ConfigUtils {
 			enableStraightLinksAsFreeform: true, // TODO - Remove in next major release.
 			enableLinkMethod: "Ports",
 			enableLinkDirection: "LeftRight",
+			enableLinkNodeAvoidance: false, // Prototype: route Elbow links around other nodes that lie in their path.
 			enableLinkSelection: LINK_SELECTION_NONE,
 			enableLinkReplaceOnNewConnection: false,
 			enableSplitLinkDroppedOnNode: false,

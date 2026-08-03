@@ -1382,6 +1382,15 @@ export default class SidePanelForms extends React.Component {
 		</div>);
 
 
+		var linkNodeAvoidance = (<div className="harness-sidepanel-children">
+			<Toggle
+				id="selectedLinkNodeAvoidance" // Set ID to corresponding field in App.js state
+				labelText="Enable Link Node Avoidance (prototype - Elbow/Ports only)"
+				toggled={this.props.getStateValue("selectedLinkNodeAvoidance")}
+				onToggle={(val) => this.setStateValue(val, "selectedLinkNodeAvoidance")}
+			/>
+		</div>);
+
 		var linkDirection = (<div className="harness-sidepanel-children" id="harness-sidepanel-link-direction">
 			<FormGroup
 				legendText="Link Direction (Node port position)"
@@ -1983,6 +1992,8 @@ export default class SidePanelForms extends React.Component {
 					{linkType}
 					{divider}
 					{linkMethod}
+					{divider}
+					{linkNodeAvoidance}
 					{divider}
 					{enableLinkSelection}
 					{divider}

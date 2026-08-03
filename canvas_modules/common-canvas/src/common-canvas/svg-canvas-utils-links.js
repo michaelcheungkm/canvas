@@ -375,12 +375,15 @@ export default class SvgCanvasLinks {
 	}
 
 	// Returns the lineArray passed in with connection path info added to it.
-	addConnectionPaths(links) {
+	// nodes is the array of all nodes in the active pipeline; it is used, when
+	// enableLinkNodeAvoidance is switched on, to detect nodes that lie in the
+	// path of a link so the link can be routed around them.
+	addConnectionPaths(links, nodes) {
 		links.forEach((link) => {
 			// Only necessary to get the path info, if the start and end coords of
 			// the link have changed.
 			if (link.coordsUpdated) {
-				link.pathInfo = this.getConnectorPathInfo(link);
+				link.pathInfo = this.getConnectorPathInfo(link, null, nodes);
 			}
 		});
 		return links;
@@ -388,7 +391,7 @@ export default class SvgCanvasLinks {
 
 	// Returns an SVG path string for the link (described by the line passed in)
 	// based on the connection and link type in the layout info.
-	getConnectorPathInfo(link, drawingNewLinkMinInitialLine) {
+	getConnectorPathInfo(link, drawingNewLinkMinInitialLine, nodes) {
 		const minInitialLine = this.getMinInitialLine(link, drawingNewLinkMinInitialLine);
 
 		if (link.type === NODE_LINK) {
@@ -396,7 +399,7 @@ export default class SvgCanvasLinks {
 					this.canvasLayout.linkType === LINK_TYPE_STRAIGHT) {
 				return this.getStraightPath(link, minInitialLine);
 			}
-			return this.getNodeLinkPathInfo(link, minInitialLine);
+			return this.getNodeLinkPathInfo(link, minInitialLine, nodes);
 
 		} else if (link.type === ASSOCIATION_LINK &&
 								this.config.enableAssocLinkType === ASSOC_RIGHT_SIDE_CURVE) {
@@ -446,12 +449,22 @@ export default class SvgCanvasLinks {
 	// The pathInfo returned contains:
 	//   path - an SVG path string describing the Elbow/Curve/Parallax/Straight line
 	//   centerPoint - the center point of the line used for decoration placement
-	getNodeLinkPathInfo(inLink, minInitialLine) {
+	getNodeLinkPathInfo(inLink, minInitialLine, nodes) {
 		let topSrc;
 		let topTrg;
 		let bottomSrc;
 		let bottomTrg;
 		let link = inLink;
+
+		// Prototype (enableLinkNodeAvoidance): gather any other nodes that lie in
+		// the direct path between the source and target node so getPathInfoEW can
+		// route around them. Only supported, for now, for the common case of an
+		// Elbow link running from an East source port to a West target port.
+		const obstacles = (this.config.enableLinkNodeAvoidance &&
+				this.canvasLayout.linkType === LINK_TYPE_ELBOW &&
+				inLink.srcDir === EAST && inLink.trgDir === WEST && nodes)
+			? this.getObstacleNodes(inLink, nodes)
+			: [];
 
 		// When drawing a link from node to node we will have src and trg nodes.
 		if (link.srcObj && link.trgNode) {
@@ -533,7 +546,7 @@ export default class SvgCanvasLinks {
 		const saveSrcDir = link.srcDir;
 		link.srcDir = EAST;
 
-		const pathInfo = this.getPathInfo({ link, minInitialLine, topSrc, topTrg, bottomSrc, bottomTrg });
+		const pathInfo = this.getPathInfo({ link, minInitialLine, topSrc, topTrg, bottomSrc, bottomTrg, obstacles });
 
 		// Restore source direction.
 		link.srcDir = saveSrcDir;
@@ -802,14 +815,85 @@ export default class SvgCanvasLinks {
 		}
 	}
 
+	// Prototype (enableLinkNodeAvoidance): Returns the set of nodes (other than
+	// the link's own source and target nodes) whose bounding box horizontally
+	// overlaps the direct routing corridor between the source and target node,
+	// and so may need to be routed around.
+	getObstacleNodes(link, nodes) {
+		const srcId = link.srcObj && link.srcObj.id;
+		const trgId = link.trgNode && link.trgNode.id;
+		if (!srcId || !trgId) {
+			return [];
+		}
+
+		const corridorLeft = Math.min(link.x1, link.x2);
+		const corridorRight = Math.max(link.x1, link.x2);
+
+		return nodes.filter((n) =>
+			n.id !== srcId &&
+			n.id !== trgId &&
+			n.x_pos < corridorRight &&
+			(n.x_pos + n.width) > corridorLeft);
+	}
+
+	// Prototype (enableLinkNodeAvoidance): If any obstacle node would intersect
+	// either of the two long segments of the direct 3-part Elbow path - the
+	// vertical drop near the source (from the source's y to the target's y, at
+	// x = source x + minInitialLine) or the horizontal run near the target
+	// (drawn at the target port's y position) - this returns a y coordinate
+	// that routes above or below the obstacle(s) instead. Returns null when
+	// there is nothing to avoid, so the existing direct-path/calculateMidY
+	// behavior is used unchanged.
+	getObstacleAvoidanceMidY(data) {
+		if (!data.obstacles || data.obstacles.length === 0) {
+			return null;
+		}
+
+		const pad = this.canvasLayout.wrapAroundNodePadding;
+		const link = data.link;
+		const directY = link.y2;
+		const jogX = link.x1 + data.minInitialLine;
+		const yMin = Math.min(link.y1, link.y2);
+		const yMax = Math.max(link.y1, link.y2);
+
+		const blocking = data.obstacles.filter((n) => {
+			const blocksHorizontalRun = (n.y_pos - pad) < directY && (n.y_pos + n.height + pad) > directY &&
+				n.x_pos < link.x2 && (n.x_pos + n.width) > jogX;
+			const blocksVerticalJog = (n.x_pos - pad) < jogX && (n.x_pos + n.width + pad) > jogX &&
+				n.y_pos < yMax && (n.y_pos + n.height) > yMin;
+			return blocksHorizontalRun || blocksVerticalJog;
+		});
+
+		if (blocking.length === 0) {
+			return null;
+		}
+
+		const topY = Math.min(...blocking.map((n) => n.y_pos)) - pad;
+		const bottomY = Math.max(...blocking.map((n) => n.y_pos + n.height)) + pad;
+
+		// The vertical drop near the source always starts at link.y1, so the
+		// detour must stay on whichever side of the obstacle(s) the source is
+		// already on - picking the "numerically closer" side can otherwise
+		// leave the vertical drop cutting straight through the obstacle.
+		if (link.y1 <= topY + pad) {
+			return topY;
+		}
+		if (link.y1 >= bottomY - pad) {
+			return bottomY;
+		}
+		return Math.abs(directY - topY) <= Math.abs(directY - bottomY) ? topY : bottomY;
+	}
+
 	// Returns an object describing the elements and center point for
 	// a link line running from an East source port to West target port.
 	getPathInfoEW(data) {
 		const pad = this.canvasLayout.wrapAroundNodePadding;
 		const xDiff = data.link.x2 - data.link.x1;
+		const obstacleMidY = this.getObstacleAvoidanceMidY(data);
 
-		if (xDiff > data.minInitialLine + data.minFinalLine ||
-			(xDiff > 0 && data.topSrc - pad < data.bottomTrg && data.bottomSrc + pad > data.topTrg)) {
+		if (obstacleMidY === null &&
+			(xDiff > data.minInitialLine + data.minFinalLine ||
+			(xDiff > 0 && data.topSrc - pad < data.bottomTrg && data.bottomSrc + pad > data.topTrg))) {
 
 			const corner1 = {};
 			const corner2 = {};
@@ -835,7 +919,9 @@ export default class SvgCanvasLinks {
 			const corner3 = {};
 			const corner4 = {};
 
-			const midY = this.calculateMidY(data.link, data.topSrc, data.bottomSrc, data.topTrg, data.bottomTrg);
+			const midY = obstacleMidY !== null
+				? obstacleMidY
+				: this.calculateMidY(data.link, data.topSrc, data.bottomSrc, data.topTrg, data.bottomTrg);
 
 			corner1.x = data.link.x1 + data.minInitialLine;
 			corner1.y = data.link.y1;
